@@ -1,0 +1,16 @@
+defaults:
+  model:
+    provider: openai
+    name: gpt-4o-mini
+
+agents:
+  hello:
+    type: llm
+    description: "A one-sentence assistant."
+    instructions: "Answer in one short sentence. No preamble."
+
+main_agent: hello
+
+runner:
+  app_name: jepras-sandbox
+  session_service: memory

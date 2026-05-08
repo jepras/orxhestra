@@ -1,0 +1,30 @@
+defaults:
+  model:
+    provider: openai
+    name: gpt-4o-mini
+
+agents:
+  planner:
+    type: llm
+    description: "Produces a tight outline."
+    instructions: |
+      Output a 3-bullet outline for the user's request. No prose,
+      no intro. Just the bullets. Hand off to the writer.
+
+  writer:
+    type: llm
+    description: "Turns an outline into a final answer."
+    instructions: |
+      You receive an outline from the planner. Expand it into a
+      concise final answer (max 4 sentences). Do not restate the
+      outline. Do not add disclaimers.
+
+  pipeline:
+    type: sequential
+    agents: [planner, writer]
+
+main_agent: pipeline
+
+runner:
+  app_name: sandbox-pipeline
+  session_service: memory

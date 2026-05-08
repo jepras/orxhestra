@@ -1,0 +1,23 @@
+defaults:
+  model:
+    provider: openai
+    name: gpt-4o-mini
+
+tools:
+  fs:
+    builtin: filesystem
+
+agents:
+  reader:
+    type: llm
+    description: "Reads local files."
+    instructions: |
+      You have filesystem tools. When asked about a file, read it with
+      read_file and answer based on what you actually read. Do not guess.
+    tools: [fs]
+
+main_agent: reader
+
+runner:
+  app_name: sandbox-with-tool
+  session_service: memory

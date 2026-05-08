@@ -1,0 +1,28 @@
+defaults:
+  model:
+    provider: openai
+    name: gpt-4o-mini
+
+tools:
+  shout:
+    function: "tools.shout"
+  word_count:
+    function: "tools.word_count"
+
+agents:
+  helper:
+    type: llm
+    description: "Uses custom Python tools to process text."
+    instructions: |
+      You have two tools:
+        - shout(text): returns the text uppercased with !!!
+        - word_count(text): returns the word count
+      Always use the appropriate tool. Do not answer from memory.
+      Respond with just the tool's output, nothing else.
+    tools: [shout, word_count]
+
+main_agent: helper
+
+runner:
+  app_name: sandbox-custom-tool
+  session_service: memory

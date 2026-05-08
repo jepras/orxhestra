@@ -1,0 +1,35 @@
+defaults:
+  model:
+    provider: openai
+    name: gpt-4o-mini
+
+agents:
+  mathy:
+    type: llm
+    description: "Handles arithmetic and number questions."
+    instructions: "You are a math specialist. Answer in one short line."
+
+  poet:
+    type: llm
+    description: "Writes short poems and wordplay."
+    instructions: "You are a poet. Reply with a single haiku. No other text."
+
+  triage:
+    type: llm
+    description: "Routes questions to the right specialist."
+    instructions: |
+      You are a router. Pick exactly one specialist with the
+      transfer_to_agent tool:
+        - mathy  : numbers, arithmetic, calculations
+        - poet   : poems, haikus, creative writing
+      Call transfer_to_agent exactly once with the correct target,
+      then reply with an empty message. Do not call the tool again.
+    tools:
+      - transfer:
+          targets: [mathy, poet]
+
+main_agent: triage
+
+runner:
+  app_name: sandbox-transfer
+  session_service: memory
