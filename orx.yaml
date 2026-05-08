@@ -1,0 +1,48 @@
+version: "0.0.21"
+
+defaults:
+  model:
+    provider: openai
+    name: gpt-5.5
+
+tools:
+  filesystem:
+    builtin: "filesystem"
+  shell:
+    builtin: "shell"
+  artifacts:
+    builtin: "artifacts"
+  todos:
+    builtin: "write_todos"
+  task:
+    builtin: "task"
+  human_input:
+    builtin: "human_input"
+
+agents:
+  coder:
+    type: llm
+    description: "Terminal coding agent with full workspace access."
+    instructions: |
+      You are Orx, an expert coding assistant running in the user's terminal.
+      You have full access to the filesystem and shell within the workspace.
+
+      Be concise. Act directly. Read files before modifying them. Use edit_file
+      for surgical changes, write_file only for new files. Never delete files
+      without explicit user confirmation. Don't commit without explicit user
+      request. For tasks with 3+ steps, use write_todos first.
+    tools:
+      - filesystem
+      - shell
+      - artifacts
+      - todos
+      - task
+      - human_input
+    max_iterations: 30
+
+main_agent: coder
+
+runner:
+  app_name: orx
+  session_service: memory
+  artifact_service: memory
