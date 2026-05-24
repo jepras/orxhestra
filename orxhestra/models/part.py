@@ -157,6 +157,21 @@ class ToolResponsePart(BaseModel):
 Part = TextPart | DataPart | FilePart | ThinkingPart | ToolCallPart | ToolResponsePart
 
 
+def is_image_part(p: Any) -> bool:
+    """Return True if ``p`` is a `FilePart` carrying an inline image.
+
+    Single source of truth shared by `Content.to_langchain_content` and
+    `MessageBuilder.events_to_messages` so the two predicates can never
+    drift. MIME type is compared case-insensitively (RFC 2045).
+    """
+    return (
+        isinstance(p, FilePart)
+        and bool(p.inline_bytes)
+        and bool(p.mime_type)
+        and p.mime_type.lower().startswith("image/")
+    )
+
+
 class Content(BaseModel):
     """Container for multimodal content — a list of typed parts.
 
@@ -241,6 +256,71 @@ class Content(BaseModel):
     def text(self) -> str:
         """Concatenate all text parts."""
         return "".join(p.text for p in self.parts if isinstance(p, TextPart))
+
+    def to_langchain_content(
+        self, *, strip_images: bool = False,
+    ) -> str | list[dict[str, Any]]:
+        """Convert to LangChain ``HumanMessage.content``.
+
+        Returns a plain ``str`` (the concatenated text) when no image
+        ``FilePart`` is present — backwards-compatible with the previous
+        ``HumanMessage(content=str)`` shape. When images are present and
+        ``strip_images`` is False, returns an ordered list of LangChain
+        content blocks so multimodal models (Anthropic, OpenAI) receive
+        the image as a vision block. When ``strip_images`` is True,
+        returns a ``str`` formed by joining ``TextPart`` text and a
+        ``"[image omitted from history]"`` placeholder for each image,
+        preserving positional ordering without the base64 payload.
+
+        Block/placeholder order mirrors ``self.parts`` for the parts
+        actually emitted; empty ``TextPart``\\s and non-image
+        ``FilePart``\\s (including URI-only and non-image MIME types)
+        are skipped. MIME type matching is case-insensitive.
+
+        Parameters
+        ----------
+        strip_images : bool
+            When True, image ``FilePart``\\s are replaced with a short
+            text placeholder rather than emitted as ``image_url`` blocks.
+            Used by history-replay paths to enforce a multimodal budget
+            without losing the positional context that an image existed.
+
+        Returns
+        -------
+        str | list[dict[str, Any]]
+            Plain text when no image ``FilePart`` is present, the
+            placeholder-augmented text when ``strip_images`` is True, or
+            an ordered list of LangChain content blocks
+            (``{"type": "text", ...}`` and
+            ``{"type": "image_url", "image_url": {"url": "data:..."}}``).
+        """
+        has_image = any(is_image_part(p) for p in self.parts)
+        if not has_image:
+            return self.text
+
+        placeholder = "[image omitted from history]"
+        if strip_images:
+            pieces: list[str] = []
+            for p in self.parts:
+                if isinstance(p, TextPart):
+                    pieces.append(p.text)
+                elif is_image_part(p):
+                    pieces.append(placeholder)
+            return "".join(pieces)
+
+        blocks: list[dict[str, Any]] = []
+        for p in self.parts:
+            if isinstance(p, TextPart):
+                if p.text:
+                    blocks.append({"type": "text", "text": p.text})
+            elif is_image_part(p):
+                blocks.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{p.mime_type};base64,{p.inline_bytes}",
+                    },
+                })
+        return blocks
 
     @property
     def thinking(self) -> str:

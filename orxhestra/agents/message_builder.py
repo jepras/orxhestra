@@ -43,6 +43,11 @@ _PREV_CONTEXT_TOTAL_MAX_CHARS = 10_000
 # Maximum characters per tool response kept in the message history.
 _TOOL_RESPONSE_MAX_CHARS = 30_000
 
+# Maximum image FileParts kept in replayed history (most-recent first).
+# Older images are replaced with a "[image omitted from history]" text
+# placeholder. The current turn's input is always sent in full.
+_MAX_IMAGES_IN_HISTORY = 4
+
 
 def _build_previous_context(
     events: list[Event],
@@ -151,6 +156,10 @@ class MessageBuilder:
         Total character budget for all previous agent responses.
     tool_response_max_chars : int
         Max characters kept per tool response in message history.
+    max_images_in_history : int
+        Max image ``FilePart``\\s kept across replayed USER_MESSAGE
+        events (counted most-recent first). Older images are replaced
+        with a text placeholder. The current turn's input is exempt.
     """
 
     def __init__(
@@ -161,6 +170,7 @@ class MessageBuilder:
         context_max_chars: int = _PREV_CONTEXT_MAX_CHARS,
         context_total_max_chars: int = _PREV_CONTEXT_TOTAL_MAX_CHARS,
         tool_response_max_chars: int = _TOOL_RESPONSE_MAX_CHARS,
+        max_images_in_history: int = _MAX_IMAGES_IN_HISTORY,
     ) -> None:
         self._instructions = instructions
         self._output_schema = output_schema
@@ -168,6 +178,7 @@ class MessageBuilder:
         self.context_max_chars = context_max_chars
         self.context_total_max_chars = context_total_max_chars
         self.tool_response_max_chars = tool_response_max_chars
+        self.max_images_in_history = max_images_in_history
 
     async def resolve_instructions(self, ctx: InvocationContext) -> str:
         """Resolve the system prompt from a string or instruction provider.
@@ -211,7 +222,7 @@ class MessageBuilder:
         return prompt
 
     async def build_conversation_history(
-        self, ctx: InvocationContext, input_text: str,
+        self, ctx: InvocationContext, input_text: "str | Content",
     ) -> tuple[str, list[BaseMessage]]:
         """Build the system prompt and full message list for the LLM.
 
@@ -219,14 +230,23 @@ class MessageBuilder:
         ----------
         ctx : InvocationContext
             The current invocation context.
-        input_text : str
-            The user message or task description.
+        input_text : str | Content
+            The user message or task description. A plain ``str`` is
+            sent as text-only. A :class:`Content` with image
+            ``FilePart``\\s is expanded into a multimodal
+            ``HumanMessage`` (text block + ``image_url`` blocks) so
+            vision-capable models receive the image as a real content
+            block, not a stringified base64 blob.
 
         Returns
         -------
         tuple[str, list[BaseMessage]]
             Resolved system prompt and the conversation messages.
         """
+        # Local import avoids a TYPE_CHECKING cycle while still letting
+        # the multimodal path build LangChain content blocks at runtime.
+        from orxhestra.models.part import Content as _Content
+
         system_prompt: str = await self.resolve_instructions(ctx)
         messages: list[BaseMessage] = []
         if system_prompt:
@@ -250,7 +270,11 @@ class MessageBuilder:
             if filtered:
                 messages.extend(self.events_to_messages(filtered))
 
-        messages.append(HumanMessage(content=input_text))
+        if isinstance(input_text, _Content):
+            human_content = input_text.to_langchain_content()
+        else:
+            human_content = input_text
+        messages.append(HumanMessage(content=human_content))
         return system_prompt, messages
 
     def events_to_messages(self, events: list[Event]) -> list[BaseMessage]:
@@ -258,7 +282,10 @@ class MessageBuilder:
 
         Applies visibility filtering, compaction processing, and drops
         tool call events whose calls lack a matching response (e.g. from
-        interrupted sessions).
+        interrupted sessions). Enforces ``max_images_in_history`` by
+        walking USER_MESSAGE events newest-first and stripping **all**
+        images on any event whose images would exceed the remaining
+        budget (per-event all-or-nothing, not per-image).
 
         Parameters
         ----------
@@ -270,6 +297,8 @@ class MessageBuilder:
         list[BaseMessage]
             LangChain messages ready for the LLM.
         """
+        from orxhestra.models.part import is_image_part
+
         # 1. Apply compaction — replace raw events with summaries
         events = apply_compaction(events)
 
@@ -281,13 +310,32 @@ class MessageBuilder:
                     if tr.tool_call_id:
                         responded_ids.add(tr.tool_call_id)
 
-        # 3. Convert to messages with visibility filtering
+        # 3. Decide which USER_MESSAGE events keep images vs. get stripped.
+        # Walk newest-first so the most recent images survive the budget.
+        budget = self.max_images_in_history
+        strip_images_for: set[int] = set()
+        for event in reversed(events):
+            if event.type != EventType.USER_MESSAGE:
+                continue
+            n_images = sum(1 for p in event.content.parts if is_image_part(p))
+            if n_images == 0:
+                continue
+            if n_images <= budget:
+                budget -= n_images
+            else:
+                strip_images_for.add(id(event))
+
+        # 4. Convert to messages with visibility filtering
         messages: list[BaseMessage] = []
         for event in events:
             if not should_include_event(event):
                 continue
             if event.type == EventType.USER_MESSAGE:
-                messages.append(event.to_langchain_message())
+                messages.append(
+                    event.to_langchain_message(
+                        strip_images=id(event) in strip_images_for,
+                    ),
+                )
             elif event.type == EventType.AGENT_MESSAGE:
                 if event.has_tool_calls:
                     paired = [

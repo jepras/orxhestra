@@ -167,7 +167,7 @@ class Runner:
         *,
         user_id: str,
         session_id: str,
-        new_message: str,
+        new_message: str | Content,
         config: RunnableConfig | None = None,
     ) -> AsyncIterator[Event]:
         """Stream events from the agent, persisting to the session.
@@ -182,8 +182,13 @@ class Runner:
             The user identifier.
         session_id : str
             The session identifier.
-        new_message : str
-            The user's input message.
+        new_message : str | Content
+            The user's input message. Plain ``str`` for text-only input,
+            or a :class:`Content` carrying mixed parts (e.g. a ``TextPart``
+            plus image ``FilePart``\\s with ``inline_bytes``) for
+            multimodal input. The ``Content`` flows through unchanged so
+            the LangChain handoff can build a vision-capable
+            ``HumanMessage`` with image blocks.
         config : RunnableConfig, optional
             LangChain runnable configuration forwarded to the agent.
 
@@ -192,6 +197,17 @@ class Runner:
         Event
             Each event produced by the agent (and any transfer targets).
         """
+        # Normalize to a Content for persistence + a string view for
+        # observability metadata. Downstream agents still receive the
+        # original `new_message` so a multimodal Content survives to the
+        # LangChain HumanMessage builder.
+        if isinstance(new_message, Content):
+            msg_content = new_message
+            msg_text = new_message.text
+        else:
+            msg_content = Content.from_text(new_message)
+            msg_text = new_message
+
         session = await self.get_or_create_session(
             user_id=user_id,
             session_id=session_id,
@@ -226,7 +242,7 @@ class Runner:
             app_name=self.app_name,
             agent_name=starting_agent.name,
             state=dict(session.state),
-            input_content=new_message,
+            input_content=msg_text,
             session=session,
             run_config=run_config,
             current_agent=starting_agent,
@@ -238,12 +254,12 @@ class Runner:
             author="user",
             session_id=session.id,
             invocation_id=ctx.invocation_id,
-            content=Content.from_text(new_message),
+            content=msg_content,
         )
         await self.session_service.append_event(session, user_event)
 
         ctx, run_manager = await start_agent_span(
-            ctx, f"Runner:{self.agent.name}", "Runner", {"input": new_message},
+            ctx, f"Runner:{self.agent.name}", "Runner", {"input": msg_text},
         )
 
         current_agent = starting_agent

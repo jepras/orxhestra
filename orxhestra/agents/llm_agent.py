@@ -496,7 +496,7 @@ class LlmAgent(BaseAgent):
     @trace("LlmAgent")
     async def astream(
         self,
-        input: str,
+        input: str | Content,
         config: RunnableConfig | None = None,
         *,
         ctx: InvocationContext | None = None,
@@ -508,8 +508,10 @@ class LlmAgent(BaseAgent):
 
         Parameters
         ----------
-        input : str
-            The user message or task description.
+        input : str | Content
+            The user message or task description. Plain ``str`` for
+            text-only input, or a :class:`Content` carrying mixed parts
+            (e.g. text + image ``FilePart``\\s) for multimodal input.
         config : RunnableConfig, optional
             LangChain-compatible config dict (tags, callbacks, etc.).
         ctx : InvocationContext, optional

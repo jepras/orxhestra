@@ -185,8 +185,16 @@ class Event(BaseModel):
             return True
         return bool(self.text or self.data)
 
-    def to_langchain_message(self) -> BaseMessage:
+    def to_langchain_message(self, *, strip_images: bool = False) -> BaseMessage:
         """Convert this event to the appropriate LangChain message type.
+
+        Parameters
+        ----------
+        strip_images : bool
+            When True, image ``FilePart``\\s on USER_MESSAGE events are
+            replaced with a text placeholder rather than re-sent as
+            ``image_url`` blocks. Used by history replay to enforce a
+            multimodal budget.
 
         Returns
         -------
@@ -196,7 +204,9 @@ class Event(BaseModel):
             are preserved on ``AIMessage`` via its ``tool_calls`` field.
         """
         if self.type == EventType.USER_MESSAGE:
-            return HumanMessage(content=self.text)
+            return HumanMessage(
+                content=self.content.to_langchain_content(strip_images=strip_images),
+            )
         elif self.type == EventType.TOOL_RESPONSE:
             parts = self.content.tool_responses
             if parts:
